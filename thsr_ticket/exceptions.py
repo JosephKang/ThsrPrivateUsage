@@ -4,3 +4,7 @@ class CaptchaError(Exception):
 
 class NoDiscountError(Exception):
     pass
+
+
+class NoAvailableTrainsError(Exception):
+    pass

@@ -2,6 +2,7 @@ import io
 import json
 import os
 import tempfile
+import time
 import cv2
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
@@ -15,12 +16,15 @@ from requests.models import Response
 from thsr_ticket.exceptions import CaptchaError
 from thsr_ticket.model.db import Record
 from thsr_ticket.remote.http_request import HTTPRequest
+from thsr_ticket.view_model.avail_trains import AvailTrains
+from thsr_ticket.view_model.error_feedback import ErrorFeedback
 from thsr_ticket.configs.web.param_schema import BookingModel
 from thsr_ticket.configs.web.parse_html_element import BOOKING_PAGE
 from thsr_ticket.configs.web.enums import StationMapping, TicketType
 from thsr_ticket.configs.common import (
     AVAILABLE_TIME_TABLE,
     DAYS_BEFORE_BOOKING_AVAILABLE,
+    MAX_CAPTCHA_RETRIES,
     MAX_TICKET_NUM,
 )
 
@@ -35,10 +39,10 @@ class FirstPageFlow:
         # First page. Booking options
         print('請稍等...')
         book_page = self.client.request_booking_page().content
-        img_resp = self.client.request_security_code_img(book_page).content
         page = BeautifulSoup(book_page, features='html.parser')
 
-        book_model = BookingModel(
+        # Collect params once — not repeated on captcha retry
+        base_params = dict(
             start_station=self.select_station('啟程'),
             dest_station=self.select_station('到達', default_value=StationMapping.Zuouing.value),
             outbound_date=self.select_date('出發'),
@@ -47,12 +51,54 @@ class FirstPageFlow:
             seat_prefer=_parse_seat_prefer_value(page),
             types_of_trip=_parse_types_of_trip_value(page),
             search_by=_parse_search_by(page),
-            security_code=_input_security_code(img_resp, self.args),
         )
-        json_params = book_model.json(by_alias=True)
-        dict_params = json.loads(json_params)
-        resp = self.client.submit_booking_form(dict_params)
-        return resp, book_model
+
+        # Retry loop — only captcha + submit is repeated
+        current_page = book_page
+        last_resp = last_model = None
+        for attempt in range(MAX_CAPTCHA_RETRIES):
+            ts = time.strftime('%H:%M:%S')
+            print(f'[{ts}] 提交訂票表單（第 {attempt + 1}/{MAX_CAPTCHA_RETRIES} 次）...')
+
+            img_resp = self.client.request_security_code_img(current_page).content
+            try:
+                security_code = _input_security_code(img_resp, self.args)
+            except CaptchaError as e:
+                ts = time.strftime('%H:%M:%S')
+                print(f'[{ts}] OCR 辨識失敗：{e}')
+                if attempt < MAX_CAPTCHA_RETRIES - 1:
+                    delay = 5 * (attempt + 1)
+                    print(f'[{ts}] {delay} 秒後重試... ({attempt + 1}/{MAX_CAPTCHA_RETRIES})')
+                    time.sleep(delay)
+                    current_page = book_page
+                    continue
+                raise
+
+            last_model = BookingModel(**base_params, security_code=security_code)
+            last_resp = self.client.submit_booking_form(
+                json.loads(last_model.json(by_alias=True))
+            )
+
+            ts = time.strftime('%H:%M:%S')
+            errors = ErrorFeedback().parse(last_resp.content)
+            if errors:
+                print(f'[{ts}] ErrorFeedback 偵測到錯誤：{errors}')
+            else:
+                trains = AvailTrains().parse(last_resp.content)
+                print(f'[{ts}] ErrorFeedback 無錯誤，解析到 {len(trains)} 班列車')
+                if trains:
+                    return last_resp, last_model
+                print(f'[{ts}] 警告：無錯誤但列車清單為空（可能為 session 異常或頁面格式不符），視為驗證碼失敗重試')
+
+            if attempt < MAX_CAPTCHA_RETRIES - 1:
+                delay = 5 * (attempt + 1)
+                print(f'[{ts}] {delay} 秒後重試... ({attempt + 1}/{MAX_CAPTCHA_RETRIES})')
+                time.sleep(delay)
+                current_page = last_resp.content
+
+        ts = time.strftime('%H:%M:%S')
+        print(f'[{ts}] 已達最大重試次數（{MAX_CAPTCHA_RETRIES}），回傳最後結果')
+        return last_resp, last_model
 
     def select_station(self, travel_type: str, default_value: int = StationMapping.Taipei.value) -> int:
         if (
@@ -218,11 +264,12 @@ def _save_captcha_for_windows(image: Image.Image, cleaned: Image.Image) -> None:
         enlarged.save(path)
 
     path = os.path.join(save_dir, 'thsr_captcha.png')
+    ts = time.strftime('%H:%M:%S')
     if path.startswith('/mnt/c/'):
         win_path = 'C:\\' + path[len('/mnt/c/'):].replace('/', '\\')
-        print(f'驗證碼圖片已儲存：{win_path} (及 thsr_captcha_clean.png)')
+        print(f'[{ts}] 驗證碼圖片已儲存：{win_path} (及 thsr_captcha_clean.png)')
     else:
-        print(f'驗證碼圖片已儲存：{path}')
+        print(f'[{ts}] 驗證碼圖片已儲存：{path}')
 
 
 def _ddddocr_recognize(raw_bytes: bytes, cleaned: Image.Image) -> str:

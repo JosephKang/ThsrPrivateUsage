@@ -22,7 +22,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from thsr_ticket.controller.booking_flow import BookingFlow
-from thsr_ticket.exceptions import CaptchaError, NoDiscountError
+from thsr_ticket.exceptions import CaptchaError, NoAvailableTrainsError, NoDiscountError
 
 # Weekday overrides for SOB profile (Mon=0 … Sun=6)
 # Tuple: (T, min_depart, max_depart)
@@ -147,6 +147,9 @@ def main() -> int:
     except NoDiscountError as e:
         print(f'[auto] 無優惠班次：{e}', file=sys.stderr)
         return 2
+    except NoAvailableTrainsError as e:
+        print(f'[auto] 無可選班次（可能驗證碼錯誤後頁面異常）：{e}', file=sys.stderr)
+        return 1
 
     return 0
 
