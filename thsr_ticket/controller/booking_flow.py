@@ -13,10 +13,11 @@ from thsr_ticket.remote.http_request import HTTPRequest
 
 
 class BookingFlow:
-    def __init__(self) -> None:
+    def __init__(self, args=None) -> None:
         self.client = HTTPRequest()
         self.db = ParamDB()
         self.record = Record()
+        self.args = args
 
         self.error_feedback = ErrorFeedback()
         self.show_error_msg = ShowErrorMsg()
@@ -25,17 +26,17 @@ class BookingFlow:
         self.show_history()
 
         # First page. Booking options
-        book_resp, book_model = FirstPageFlow(client=self.client, record=self.record).run()
+        book_resp, book_model = FirstPageFlow(client=self.client, record=self.record, args=self.args).run()
         if self.show_error(book_resp.content):
             return book_resp
 
         # Second page. Train confirmation
-        train_resp, train_model = ConfirmTrainFlow(self.client, book_resp).run()
+        train_resp, train_model = ConfirmTrainFlow(self.client, book_resp, args=self.args).run()
         if self.show_error(train_resp.content):
             return train_resp
 
         # Final page. Ticket confirmation
-        ticket_resp, ticket_model = ConfirmTicketFlow(self.client, train_resp, self.record).run()
+        ticket_resp, ticket_model = ConfirmTicketFlow(self.client, train_resp, self.record, args=self.args).run()
         if self.show_error(ticket_resp.content):
             return ticket_resp
 
@@ -52,7 +53,8 @@ class BookingFlow:
         hist = self.db.get_history()
         if not hist:
             return
-        h_idx = history_info(hist)
+        auto = getattr(self.args, 'auto_captcha', False)
+        h_idx = history_info(hist, select=not auto)
         if h_idx is not None:
             self.record = hist[h_idx]
 
@@ -61,5 +63,6 @@ class BookingFlow:
         if len(errors) == 0:
             return False
 
+        #print(errors)
         self.show_error_msg.show(errors)
         return True

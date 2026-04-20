@@ -8,3 +8,7 @@ jsonschema>=3.0.1
 beautifulsoup4>=4.8.2
 tinydb>=3.15.2
 pydantic<2.0
+opencv-python>=4.13
+scikit-image>=0.26
+ddddocr>=1.6
+numpy>=2.4
