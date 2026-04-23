@@ -52,5 +52,9 @@ class ConfirmTrainFlow:
             window = f'{min_depart}~{max_depart}' if min_depart else ''
             raise NoDiscountError(f'無符合條件的優惠班次（8折／65折）{f"（{window}）" if window else ""}')
 
+        if getattr(self.args, 'auto_train', False):
+            print(f'自動選擇第一班：{trains[0].id} {trains[0].depart}~{trains[0].arrive} {trains[0].discount_str}')
+            return trains[0].form_value
+
         selection = int(input(f'輸入選擇（預設：{default_value}）：') or default_value)
         return trains[selection-1].form_value
